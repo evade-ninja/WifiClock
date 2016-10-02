@@ -9,7 +9,7 @@
 
 #include "ST7565.h"
 #include <Wire.h>  // must be incuded here so that Arduino library object file references work
-#include <RtcDS1307.h>
+#include <RtcDS3231.h>
 
 #include "wifi.h"
 
@@ -25,7 +25,7 @@
 
 #define DATE_Y_POS 50
 
-RtcDS1307 Rtc;
+RtcDS3231 Rtc;
 
 int ledPin =  D7;    // LED connected to digital pin 13
 
@@ -56,6 +56,8 @@ const char *password = WIFI_SECRET;
 //byte packetBuffer[ NTP_PACKET_SIZE];
 //WiFiUDP Udp;
 
+#include "ntp.cpp"
+
 Ticker timeUpdater;
 
 //webserver
@@ -63,97 +65,26 @@ Ticker timeUpdater;
 
 void onSTAGotIP(WiFiEventStationModeGotIP ipInfo) {
   Serial.printf("Got IP: %s\r\n", ipInfo.ip.toString().c_str());
-  NTP.begin("pool.ntp.org", 1, true);
+  NTP.begin("pool.ntp.org", -7, true);
   NTP.setInterval(63);
-  digitalWrite(2, LOW);
+  //digitalWrite(2, LOW);
 }
 
 void onSTADisconnected(WiFiEventStationModeDisconnected event_info) {
   Serial.printf("Disconnected from SSID: %s\n", event_info.ssid.c_str());
   Serial.printf("Reason: %d\n", event_info.reason);
-  digitalWrite(2, HIGH);
+  //digitalWrite(2, HIGH);
 }
 
 // The setup() method runs once, when the sketch starts
 void setup()   {                
   Serial.begin(115200);
 
-    //Serial.print("compiled: ");
-    //Serial.print(__DATE__);
-    //Serial.println(__TIME__);
+    Serial.print("compiled: ");
+    Serial.print(__DATE__);
+    Serial.println(__TIME__);
 
-  WiFi.mode(WIFI_STA);
-  WiFi.begin ( ssid, password );
-
-  static WiFiEventHandler e1, e2;
-
-  NTP.onNTPSyncEvent([](NTPSyncEvent_t ntpEvent) {
-    if (ntpEvent) {
-      Serial.print("Time Sync error: ");
-      if (ntpEvent == noResponse)
-        Serial.println("NTP server not reachable");
-      else if (ntpEvent == invalidAddress)
-        Serial.println("Invalid NTP server address");
-    }
-    else {
-      Serial.print("Got NTP time: ");
-      Serial.println(NTP.getTimeDateString(NTP.getLastNTPSync()));
-    }
-  });
-  WiFi.onEvent([](WiFiEvent_t e) {
-    Serial.printf("Event wifi -----> %d\n", e);
-  });
-  e1 = WiFi.onStationModeGotIP(onSTAGotIP);// As soon WiFi is connected, start NTP Client
-  e2 = WiFi.onStationModeDisconnected(onSTADisconnected);
-
-  //--------RTC SETUP ------------
-  Rtc.Begin();
-  //Wire.begin(0, 2); // due to limited pins, use pin 0 and 2 for SDA, SCL
-  // if you are using ESP-01 then uncomment the line below to reset the pins to
-  // the available pins for SDA, SCL
-  
-
-  RtcDateTime compiled = RtcDateTime(__DATE__, __TIME__);
-  printDateTime(compiled);
-  //Serial.println();
-
-  if (!Rtc.IsDateTimeValid()) 
-  {
-      // Common Cuases:
-      //    1) first time you ran and the device wasn't running yet
-      //    2) the battery on the device is low or even missing
-
-      // following line sets the RTC to the date & time this sketch was compiled
-      // it will also reset the valid flag internally unless the Rtc device is
-      // having an issue
-
-      Rtc.SetDateTime(compiled);
-  }
-
-  if (!Rtc.GetIsRunning())
-  {
-      //Serial.println("RTC was not actively running, starting now");
-      Rtc.SetIsRunning(true);
-  }
-
-  RtcDateTime now = Rtc.GetDateTime();
-  if (now < compiled) 
-  {
-      //Serial.println("RTC is older than compile time!  (Updating DateTime)");
-      Rtc.SetDateTime(compiled);
-  }
-  else if (now > compiled) 
-  {
-      //Serial.println("RTC is newer than compile time. (this is expected)");
-  }
-  else if (now == compiled) 
-  {
-      //Serial.println("RTC is the same as compile time! (not expected but all is fine)");
-  }
-
-  // never assume the Rtc was last configured by you, so
-  // just clear them to your needed state
-  Rtc.SetSquareWavePin(DS1307SquareWaveOut_Low); 
+  initRTC();
 
   // turn on backlight
   pinMode(BACKLIGHT_LED, OUTPUT);
@@ -170,21 +101,16 @@ void setup()   {
   glcd.begin(0x1B);
   glcd.clear();
 
-  NTP.onNTPSyncEvent([](NTPSyncEvent_t error){
-        if (error) {
-            Serial.print("Time Sync error: ");
-            if (error == noResponse)
-                Serial.println("NTP server not reachable");
-            else if (error == invalidAddress)
-                Serial.println("Invalid NTP server address");
-        }
-        else {
-            Serial.print("Got NTP time: ");
-            Serial.println(NTP.getTimeDateString(NTP.getLastNTPSync()));
-        }
-  });
+  WiFi.mode(WIFI_STA);
+  WiFi.begin ( ssid, password );
 
-  timeUpdater.attach(10,syncTime);
+  initNTP();
+ 
+  syncTime();
+  timeUpdater.attach(30,syncTime);
+
+  Serial.println("Setup complete.");
+  
 }
 
 void loop()                     
@@ -420,8 +346,8 @@ void drawDate(const RtcDateTime& dt){
     spacing[5] = VISITOR_14_1WIDTH;
   }
 
-  int tDateWidth = ((6-numOnes)*VISITOR_14_WIDTH) + (numOnes * VISITOR_14_1WIDTH) + (2*VISITOR_14_DOT_WIDTH) + (7*VISITOR_14_SPACING);
-  int tDatePos = (tDateWidth/2) - 2;
+  int tDateWidth = ((5-numOnes)*VISITOR_14_WIDTH) + (numOnes * VISITOR_14_1WIDTH) + (2*VISITOR_14_DOT_WIDTH) + (7*VISITOR_14_SPACING);
+  int tDatePos = (tDateWidth/2);
 
   glcd.fillrect(0,DATE_Y_POS,128,VISITOR_14_HEIGHT,WHITE);
 
@@ -453,8 +379,85 @@ void drawDate(const RtcDateTime& dt){
     
 }
 
-void syncTime(){
-  String tNow = NTP.getTimeDateString();
-  Serial.println(tNow);
-  //Rtc.SetDateTime(tNow);
+void initNTP(){
+  static WiFiEventHandler e1, e2;
+
+  NTP.setTimeZone(-7);
+
+  NTP.onNTPSyncEvent([](NTPSyncEvent_t ntpEvent) {
+    if (ntpEvent) {
+      Serial.print("Time Sync error: ");
+      if (ntpEvent == noResponse)
+        Serial.println("NTP server not reachable");
+      else if (ntpEvent == invalidAddress)
+        Serial.println("Invalid NTP server address");
+    }
+    else {
+      Serial.print("Got NTP time: ");
+      Serial.println(NTP.getTimeDateString(NTP.getLastNTPSync()));
+    }
+  });
+  WiFi.onEvent([](WiFiEvent_t e) {
+    Serial.printf("Event wifi -----> %d\n", e);
+  });
+  e1 = WiFi.onStationModeGotIP(onSTAGotIP);// As soon WiFi is connected, start NTP Client
+  e2 = WiFi.onStationModeDisconnected(onSTADisconnected);
 }
+
+void syncTime(){
+    RtcDateTime newTime = NTP.getTime();
+    if(newTime>0)
+      Rtc.SetDateTime(newTime-946684800);    
+}
+
+void initRTC(){
+  //--------RTC SETUP ------------
+  Rtc.Begin();
+  //Wire.begin(0, 2); // due to limited pins, use pin 0 and 2 for SDA, SCL
+  // if you are using ESP-01 then uncomment the line below to reset the pins to
+  // the available pins for SDA, SCL
+  
+
+  RtcDateTime compiled = RtcDateTime(__DATE__, __TIME__);
+  printDateTime(compiled);
+  //Serial.println();
+
+  if (!Rtc.IsDateTimeValid()) 
+  {
+      // Common Cuases:
+      //    1) first time you ran and the device wasn't running yet
+      //    2) the battery on the device is low or even missing
+
+      // following line sets the RTC to the date & time this sketch was compiled
+      // it will also reset the valid flag internally unless the Rtc device is
+      // having an issue
+
+      Rtc.SetDateTime(compiled);
+  }
+
+  if (!Rtc.GetIsRunning())
+  {
+      Serial.println("RTC was not actively running, starting now");
+      Rtc.SetIsRunning(true);
+  }
+
+  RtcDateTime now = Rtc.GetDateTime();
+  if (now < compiled) 
+  {
+      Serial.println("RTC is older than compile time!  (Updating DateTime)");
+      Rtc.SetDateTime(compiled);
+  }
+  else if (now > compiled) 
+  {
+      Serial.println("RTC is newer than compile time. (this is expected)");
+  }
+  else if (now == compiled) 
+  {
+      //Serial.println("RTC is the same as compile time! (not expected but all is fine)");
+  }
+
+  // never assume the Rtc was last configured by you, so
+  // just clear them to your needed state
+  Rtc.SetSquareWavePin(DS3231SquareWavePin_ModeNone); 
+}
+
