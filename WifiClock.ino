@@ -1,34 +1,17 @@
-#include <Arduino.h>
+#include <TimeLib.h>
+#include <ESP8266WiFi.h>
+#include <NtpClientLib.h>
+
+#include <Ticker.h>
+#include <String.h>
+#include "wifi.h"
+
+
 #include "ST7565.h"
-//#include <avr/pgmspace.h>
 #include <Wire.h>  // must be incuded here so that Arduino library object file references work
 #include <RtcDS1307.h>
 
-
-#include <ESP8266WiFi.h>
-#include <WiFiClient.h>
-#include <ESP8266WebServer.h>
-#include <ESP8266mDNS.h>
-#include <ArduinoJson.h>
-#include <Ticker.h>
-#include <String.h>
-#include <WiFiUdp.h>
-#include <TimeLib.h>
-
-
-
-
-
-/*#include "./resources/bttf_glcd.h"
-#include "./resources/willow_glcd.h"
-#include "./resources/dimitri_glcd.h"
-#include "./resources/aldo_glcd.h"
-#include "./resources/atlanta_glcd.h"
-#include "./resources/hl2_glcd.h"
-#include "./resources/cone_glcd.h"
-#include "./resources/force_glcd.h"
-#include "./resources/micro1_glcd.h"
-#include "./resources/force_sample_glcd.h"*/
+#include "wifi.h"
 
 #include "./resources/force_nums.h"
 #include "./resources/visitor_14.h"
@@ -57,90 +40,126 @@ int ledPin =  D7;    // LED connected to digital pin 13
 //ST7565 glcd(9, 8, 7, 6, 5);
 ST7565 glcd(D6, D5, D4, D3, D0);
 
-/*#define LOGO16_GLCD_HEIGHT 16 
-#define LOGO16_GLCD_WIDTH  16 */
+//WiFi Defaults
+const char *ssid = WIFI_SSID;
+const char *password = WIFI_SECRET;
 
-int test_img = 0;
-long next_test = 0;
+//Time service variables
+//IPAddress timeServerIP;
+//const char* ntpServerName = "time.nist.gov";
+//const char* ntpServerName = "pool.ntp.org";
 
-// a bitmap of a 16x16 fruit icon
-/*const static unsigned char __attribute__ ((progmem)) logo16_glcd_bmp[]={
-0x30, 0xf0, 0xf0, 0xf0, 0xf0, 0x30, 0xf8, 0xbe, 0x9f, 0xff, 0xf8, 0xc0, 0xc0, 0xc0, 0x80, 0x00, 
-0x20, 0x3c, 0x3f, 0x3f, 0x1f, 0x19, 0x1f, 0x7b, 0xfb, 0xfe, 0xfe, 0x07, 0x07, 0x07, 0x03, 0x00, };*/
+//const int NTP_PACKET_SIZE = 48;
+//unsigned int localPort = 2390;
+//const int timeZone = -6;
+
+//byte packetBuffer[ NTP_PACKET_SIZE];
+//WiFiUDP Udp;
+
+Ticker timeUpdater;
+
+//webserver
+//ESP8266WebServer server ( 80 );
+
+void onSTAGotIP(WiFiEventStationModeGotIP ipInfo) {
+  Serial.printf("Got IP: %s\r\n", ipInfo.ip.toString().c_str());
+  NTP.begin("pool.ntp.org", 1, true);
+  NTP.setInterval(63);
+  digitalWrite(2, LOW);
+}
+
+void onSTADisconnected(WiFiEventStationModeDisconnected event_info) {
+  Serial.printf("Disconnected from SSID: %s\n", event_info.ssid.c_str());
+  Serial.printf("Reason: %d\n", event_info.reason);
+  digitalWrite(2, HIGH);
+}
 
 // The setup() method runs once, when the sketch starts
 void setup()   {                
-  //Serial.begin(9600);
+  Serial.begin(115200);
 
     //Serial.print("compiled: ");
     //Serial.print(__DATE__);
     //Serial.println(__TIME__);
 
-    //--------RTC SETUP ------------
-    Rtc.Begin();
-    //Wire.begin(0, 2); // due to limited pins, use pin 0 and 2 for SDA, SCL
-    // if you are using ESP-01 then uncomment the line below to reset the pins to
-    // the available pins for SDA, SCL
-    
+  WiFi.mode(WIFI_STA);
+  WiFi.begin ( ssid, password );
 
-    RtcDateTime compiled = RtcDateTime(__DATE__, __TIME__);
-    printDateTime(compiled);
-    //Serial.println();
+  static WiFiEventHandler e1, e2;
 
-    if (!Rtc.IsDateTimeValid()) 
-    {
-        // Common Cuases:
-        //    1) first time you ran and the device wasn't running yet
-        //    2) the battery on the device is low or even missing
-
-        Serial.println("RTC lost confidence in the DateTime!");
-
-        // following line sets the RTC to the date & time this sketch was compiled
-        // it will also reset the valid flag internally unless the Rtc device is
-        // having an issue
-
-        Rtc.SetDateTime(compiled);
+  NTP.onNTPSyncEvent([](NTPSyncEvent_t ntpEvent) {
+    if (ntpEvent) {
+      Serial.print("Time Sync error: ");
+      if (ntpEvent == noResponse)
+        Serial.println("NTP server not reachable");
+      else if (ntpEvent == invalidAddress)
+        Serial.println("Invalid NTP server address");
     }
-
-    if (!Rtc.GetIsRunning())
-    {
-        //Serial.println("RTC was not actively running, starting now");
-        Rtc.SetIsRunning(true);
+    else {
+      Serial.print("Got NTP time: ");
+      Serial.println(NTP.getTimeDateString(NTP.getLastNTPSync()));
     }
+  });
+  WiFi.onEvent([](WiFiEvent_t e) {
+    Serial.printf("Event wifi -----> %d\n", e);
+  });
+  e1 = WiFi.onStationModeGotIP(onSTAGotIP);// As soon WiFi is connected, start NTP Client
+  e2 = WiFi.onStationModeDisconnected(onSTADisconnected);
 
-    RtcDateTime now = Rtc.GetDateTime();
-    if (now < compiled) 
-    {
-        //Serial.println("RTC is older than compile time!  (Updating DateTime)");
-        Rtc.SetDateTime(compiled);
-    }
-    else if (now > compiled) 
-    {
-        //Serial.println("RTC is newer than compile time. (this is expected)");
-    }
-    else if (now == compiled) 
-    {
-        //Serial.println("RTC is the same as compile time! (not expected but all is fine)");
-    }
+  //--------RTC SETUP ------------
+  Rtc.Begin();
+  //Wire.begin(0, 2); // due to limited pins, use pin 0 and 2 for SDA, SCL
+  // if you are using ESP-01 then uncomment the line below to reset the pins to
+  // the available pins for SDA, SCL
+  
 
-    // never assume the Rtc was last configured by you, so
-    // just clear them to your needed state
-    Rtc.SetSquareWavePin(DS1307SquareWaveOut_Low); 
+  RtcDateTime compiled = RtcDateTime(__DATE__, __TIME__);
+  printDateTime(compiled);
+  //Serial.println();
 
-#ifdef __AVR__
-  Serial.println(freeRam());
-#endif
+  if (!Rtc.IsDateTimeValid()) 
+  {
+      // Common Cuases:
+      //    1) first time you ran and the device wasn't running yet
+      //    2) the battery on the device is low or even missing
+
+      // following line sets the RTC to the date & time this sketch was compiled
+      // it will also reset the valid flag internally unless the Rtc device is
+      // having an issue
+
+      Rtc.SetDateTime(compiled);
+  }
+
+  if (!Rtc.GetIsRunning())
+  {
+      //Serial.println("RTC was not actively running, starting now");
+      Rtc.SetIsRunning(true);
+  }
+
+  RtcDateTime now = Rtc.GetDateTime();
+  if (now < compiled) 
+  {
+      //Serial.println("RTC is older than compile time!  (Updating DateTime)");
+      Rtc.SetDateTime(compiled);
+  }
+  else if (now > compiled) 
+  {
+      //Serial.println("RTC is newer than compile time. (this is expected)");
+  }
+  else if (now == compiled) 
+  {
+      //Serial.println("RTC is the same as compile time! (not expected but all is fine)");
+  }
+
+  // never assume the Rtc was last configured by you, so
+  // just clear them to your needed state
+  Rtc.SetSquareWavePin(DS1307SquareWaveOut_Low); 
 
   // turn on backlight
   pinMode(BACKLIGHT_LED, OUTPUT);
   
   pinMode(D8, OUTPUT);
   pinMode(D9, OUTPUT);
-  /*
-   * digitalWrite(BACKLIGHT_LED, LOW);
-   * digitalWrite(11, LOW);
-   * digitalWrite(10, LOW);
-   */
   
   analogWrite(BACKLIGHT_LED,0);
   analogWrite(D8,255);
@@ -151,63 +170,22 @@ void setup()   {
   glcd.begin(0x1B);
   glcd.clear();
 
-/*
-  glcd.display(); // show splashscreen
-  delay(2000);
-  glcd.clear();
+  NTP.onNTPSyncEvent([](NTPSyncEvent_t error){
+        if (error) {
+            Serial.print("Time Sync error: ");
+            if (error == noResponse)
+                Serial.println("NTP server not reachable");
+            else if (error == invalidAddress)
+                Serial.println("Invalid NTP server address");
+        }
+        else {
+            Serial.print("Got NTP time: ");
+            Serial.println(NTP.getTimeDateString(NTP.getLastNTPSync()));
+        }
+  });
 
-  // draw a single pixel
-  glcd.setpixel(10, 10, BLACK);
-  glcd.display();        // show the changes to the buffer
-  delay(2000);
-  glcd.clear();
-
-  // draw many lines
-  testdrawline();
-  glcd.display();       // show the lines
-  delay(2000);
-  glcd.clear();
-
-  // draw rectangles
-  testdrawrect();
-  glcd.display();
-  delay(2000);
-  glcd.clear();
-
-  // draw multiple rectangles
-  testfillrect();
-  glcd.display();
-  delay(2000);
-  glcd.clear();
-
-  // draw mulitple circles
-  testdrawcircle();
-  glcd.display();
-  delay(2000);
-  glcd.clear();
-
-  // draw a black circle, 10 pixel radius, at location (32,32)
-  glcd.fillcircle(32, 32, 10, BLACK);
-  glcd.display();
-  delay(2000);
-  glcd.clear();
-
-  // draw the first ~120 characters in the font
-  testdrawchar();
-  glcd.display();
-  delay(2000);
-  glcd.clear();
-
-  // draw a string at location (0,0)
-  glcd.drawstring(0, 0, "Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation");
-  glcd.display();
-  delay(2000);
-  glcd.clear();
-
-  // draw a bitmap icon and 'animate' movement
-  testdrawbitmap(logo16_glcd_bmp, LOGO16_GLCD_HEIGHT, LOGO16_GLCD_WIDTH);*/
+  timeUpdater.attach(10,syncTime);
 }
-
 
 void loop()                     
 {
@@ -216,9 +194,6 @@ void loop()
   drawDate(now);
   //Serial.println(freeRam());
   delay(1000);
-  /*if(millis() > next_test){
-    test();
-  }*/
 }
 
 #define countof(a) (sizeof(a) / sizeof(a[0]))
@@ -478,72 +453,8 @@ void drawDate(const RtcDateTime& dt){
     
 }
 
-/*
-void test(){
-  //glcd.clear();
-  glcd.fillrect(0,0,128,48,WHITE);
-  switch(test_img){
-    case 0:
-     //glcd.drawstring(0,0,"BTTF");
-     glcd.drawbitmap(0,0,force_sample_glcd_bmp,128, 64,BLACK);
-     break;
-    case 1:
-     glcd.drawstring(0,0,"WILLOW");
-     glcd.drawbitmap(0,0,willow_glcd_bmp,128, 48,BLACK);
-     break;
-    case 2:
-     glcd.drawstring(0,0,"DIMITRI");
-     glcd.drawbitmap(0,0,dimitri_glcd_bmp,128, 48,BLACK);
-     break;
-    case 3:
-     glcd.drawstring(0,0,"ALDO");
-     glcd.drawbitmap(0,0,aldo_glcd_bmp,128, 48,BLACK);
-     break;
-    case 4:
-     glcd.drawstring(0,0,"ATLANTA");
-     glcd.drawbitmap(0,0,atlanta_glcd_bmp,128, 48,BLACK);
-     break;
-    case 5:
-     glcd.drawstring(0,0,"HL2");
-     glcd.drawbitmap(0,0,hl2_glcd_bmp,128, 48,BLACK);
-     break;
-    case 6:
-     glcd.drawstring(0,0,"CONE");
-     glcd.drawbitmap(0,0,cone_glcd_bmp,128, 48,BLACK);
-     break;
-    case 7:
-     glcd.drawstring(0,0,"FORCE");
-     glcd.drawbitmap(0,0,force_glcd_bmp,128, 48,BLACK);
-     break;   
-    case 8:
-     glcd.drawstring(0,0,"MICRO1");
-     glcd.drawbitmap(0,0,micro1_glcd_bmp,128, 48,BLACK);
-     break;
-  }
-  glcd.display();
-  test_img++;
-  if(test_img>8)
-    test_img=0;
-
-  next_test = millis() + 5000;
-  
+void syncTime(){
+  String tNow = NTP.getTimeDateString();
+  Serial.println(tNow);
+  //Rtc.SetDateTime(tNow);
 }
-*/
-
-#ifdef __AVR__
-// this handy function will return the number of bytes currently free in RAM, great for debugging!   
-int freeRam(void)
-{
-  extern int  __bss_end; 
-  extern int  *__brkval; 
-  int free_memory; 
-  if((int)__brkval == 0) {
-    free_memory = ((int)&free_memory) - ((int)&__bss_end); 
-  }
-  else {
-    free_memory = ((int)&free_memory) - ((int)__brkval); 
-  }
-  return free_memory; 
-} 
-#endif
-
