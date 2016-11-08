@@ -120,6 +120,9 @@ void loop()
   drawDate(now);
   //Serial.println(freeRam());
   delay(1000);
+  int sensor = analogRead(A0);
+  float voltage = sensor * (5.0/1023.0);
+  Serial.println(voltage);
 }
 
 #define countof(a) (sizeof(a) / sizeof(a[0]))
